@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pyc
+pdf_cache.txt
+vector_memory.json

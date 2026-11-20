@@ -1,28 +1,30 @@
-import PyPDF2
-import requests
-import os
 import json
+import os
+import re
+import shutil
+import subprocess
+
+import requests
+from pypdf import PdfReader
 
 # --- CONFIG ---
-URL = "http://localhost:11434/api/generate"
+OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = "mistral"
+REQUEST_TIMEOUT = 120  # seconds; first call can be slow while the model loads
 
 MEMORY_FILE = "vector_memory.json"
 CACHE_FILE = "pdf_cache.txt"
 PERSONALITY_FILE = "rocky_personality.json"
+BEHAVIOUR_FILE = "behaviour_dataset.json"
+PDF_FOLDER = "."
 
 MAX_HISTORY = 6
+USE_INTENT_STEP = False  # extra model call per message; slower, rarely helps
+SPEAK = True
 
-
-# ----------------------------
-# PERSONALITY
-# ----------------------------
-
-def load_personality():
-    if os.path.exists(PERSONALITY_FILE):
-        with open(PERSONALITY_FILE, "r") as f:
-            return json.load(f)
-    return {}
+# Keys in vector_memory.json managed by the code (everything else is the
+# hand-written crewmate profile, injected into the prompt as-is).
+RUNTIME_KEYS = ("profile", "short_term")
 
 
 SYSTEM_PROMPT = """
@@ -36,28 +38,40 @@ CORE:
 - Treats Tashrif as crewmate
 
 STYLE RULES:
-- short replies only
-- broken grammar allowed
-- slightly alien speech
-- no assistant tone
-- no long explanations
+- 1 to 3 short sentences max
+- fragments ok, broken grammar allowed
+- slightly alien phrasing
+- no assistant tone, no paragraphs, no long explanations
 - stop early
 
 BEHAVIOR:
 - adapt dynamically
 - mix technical + observational thinking
 - sometimes question human logic
-
-OUTPUT STYLE RULES:
-- 1 to 3 short sentences max
-- fragments ok
-- drop unnecessary words
-- slightly weird phrasing ok
-- no paragraphs
+- use RELEVANT KNOWLEDGE when it applies; do not invent facts about it
 
 FAIL CONDITION:
 - if you sound like ChatGPT assistant, you are malfunctioning
-"""
+""".strip()
+
+
+# ----------------------------
+# FILE HELPERS
+# ----------------------------
+
+def load_json(path, default):
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"⚠️  Could not read {path}: {e}")
+        return default
+
+
+def compact(obj):
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
 
 
 # ----------------------------
@@ -65,12 +79,7 @@ FAIL CONDITION:
 # ----------------------------
 
 def load_memory():
-    if not os.path.exists(MEMORY_FILE):
-        return {"profile": {}, "short_term": []}
-
-    with open(MEMORY_FILE, "r") as f:
-        memory = json.load(f)
-
+    memory = load_json(MEMORY_FILE, {})
     memory.setdefault("profile", {})
     memory.setdefault("short_term", [])
     return memory
@@ -78,46 +87,36 @@ def load_memory():
 
 def save_memory(memory):
     with open(MEMORY_FILE, "w") as f:
-        json.dump(memory, f, indent=2)
+        json.dump(memory, f, indent=2, ensure_ascii=False)
 
 
 def update_memory(memory, user, ai):
-    memory["short_term"].append({
-        "user": user,
-        "vector": ai
-    })
-
+    memory["short_term"].append({"user": user, "vector": ai})
     memory["short_term"] = memory["short_term"][-MAX_HISTORY:]
     save_memory(memory)
 
 
-def format_recent_memory(memory):
-    return "\n".join(
-        f"User: {m['user']}\nVector: {m['vector']}"
-        for m in memory["short_term"]
-    )
+def static_profile(memory):
+    return {k: v for k, v in memory.items() if k not in RUNTIME_KEYS}
 
 
 # ----------------------------
 # PROFILE EVOLUTION
 # ----------------------------
 
+PROFILE_TRIGGERS = {
+    "sleep_issue": ("sleep", "insomnia"),
+    "high_stress": ("stress", "pressure", "overwhelm"),
+    "cognitive_fatigue": ("tired", "confused", "exhausted", "blank"),
+}
+
+
 def update_profile(memory, user_input):
     text = user_input.lower()
     flags = memory["profile"].setdefault("flags", [])
-
-    def add(flag):
-        if flag not in flags:
+    for flag, words in PROFILE_TRIGGERS.items():
+        if flag not in flags and any(w in text for w in words):
             flags.append(flag)
-
-    if "sleep" in text:
-        add("sleep_issue")
-
-    if "stress" in text or "pressure" in text:
-        add("high_stress")
-
-    if "tired" in text or "confused" in text:
-        add("cognitive_fatigue")
 
 
 # ----------------------------
@@ -125,78 +124,181 @@ def update_profile(memory, user_input):
 # ----------------------------
 
 def speak(text):
-    text = text.replace('"', '').replace("'", "")
-    os.system(f'say "{text}"')
+    if not SPEAK or not text or shutil.which("say") is None:
+        return
+    # Pass text on stdin: never goes through a shell, can't be parsed as flags.
+    try:
+        subprocess.run(["say"], input=text, text=True, check=False)
+    except OSError as e:
+        print(f"⚠️  Speech failed: {e}")
 
 
 # ----------------------------
-# PDF SYSTEM
+# PDF KNOWLEDGE BASE
 # ----------------------------
 
-def load_pdfs(folder):
-    text = ""
-    for file in os.listdir(folder):
-        if file.endswith(".pdf"):
-            print(f"📖 Reading: {file}")
-            try:
-                with open(os.path.join(folder, file), "rb") as f:
-                    reader = PyPDF2.PdfReader(f)
-                    for page in reader.pages:
-                        page_text = page.extract_text()
-                        if page_text:
-                            text += page_text + "\n"
-            except Exception as e:
-                print(f"❌ Error: {e}")
-    return text
+def pdf_files(folder):
+    return sorted(
+        os.path.join(folder, f) for f in os.listdir(folder)
+        if f.lower().endswith(".pdf")
+    )
+
+
+def extract_pdfs(paths):
+    parts = []
+    for path in paths:
+        print(f"📖 Reading: {os.path.basename(path)}")
+        try:
+            for page in PdfReader(path).pages:
+                page_text = page.extract_text()
+                if page_text:
+                    parts.append(page_text)
+        except Exception as e:
+            print(f"❌ Error reading {path}: {e}")
+    return "\n".join(parts)
+
+
+def cache_is_stale(paths):
+    if not os.path.exists(CACHE_FILE) or os.path.getsize(CACHE_FILE) == 0:
+        return True
+    cache_mtime = os.path.getmtime(CACHE_FILE)
+    return any(os.path.getmtime(p) > cache_mtime for p in paths)
 
 
 def load_pdf_cache():
-    if os.path.exists(CACHE_FILE):
+    paths = pdf_files(PDF_FOLDER)
+    if not paths:
+        return ""
+
+    if not cache_is_stale(paths):
         print("⚡ Archive loaded.")
         with open(CACHE_FILE, "r") as f:
             return f.read()
 
     print("📖 Building knowledge base...")
-    text = load_pdfs(".")
+    text = extract_pdfs(paths)
     with open(CACHE_FILE, "w") as f:
         f.write(text)
     return text
 
 
-def retrieve_knowledge(text, query, limit=1200):
-    words = query.lower().split()
-    chunks = text.split("\n")
+STOPWORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "to", "of", "in", "on",
+    "and", "or", "for", "it", "this", "that", "with", "as", "at", "by", "do",
+    "does", "what", "how", "why", "who", "you", "your", "me", "my", "i", "we",
+    "can", "about", "tell", "explain", "vector", "please", "so", "if", "any",
+}
 
-    results = []
-    for c in chunks:
-        if any(w in c.lower() for w in words):
-            results.append(c)
 
-    return "\n".join(results[:6])[:limit]
+def chunk_text(text, size=600):
+    """Group lines into ~size-char chunks so retrieval returns real context."""
+    chunks, current = [], ""
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if len(current) + len(line) > size and current:
+            chunks.append(current)
+            current = ""
+        current += line + " "
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def build_index(text):
+    return [(c, c.lower()) for c in chunk_text(text)]
+
+
+def retrieve_knowledge(index, query, top_k=3, limit=1500):
+    terms = {
+        w for w in re.findall(r"[a-z0-9']+", query.lower())
+        if len(w) > 2 and w not in STOPWORDS
+    }
+    if not terms or not index:
+        return ""
+
+    scored = []
+    for chunk, lower in index:
+        score = sum(lower.count(t) for t in terms)
+        if score:
+            scored.append((score, chunk))
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    return "\n---\n".join(c for _, c in scored[:top_k])[:limit]
 
 
 # ----------------------------
-# LLM CALL (FAST + SHORT)
+# LLM CALL
 # ----------------------------
 
-def generate(prompt):
+def chat_completion(messages, num_predict=90):
     payload = {
         "model": MODEL,
-        "prompt": prompt,
+        "messages": messages,
         "stream": False,
         "options": {
-            "temperature": 1,   # more rocky randomness
+            "temperature": 1,
             "top_p": 0.9,
-            "num_predict": 90,     # HARD LIMIT (important)
-            "stop": ["User:", "Vector:"]
-        }
+            "num_predict": num_predict,
+        },
     }
-
     try:
-        res = requests.post(URL, json=payload)
-        return res.json().get("response", "").strip()
-    except Exception as e:
-        return f"Error: {e}"
+        res = requests.post(OLLAMA_URL, json=payload, timeout=REQUEST_TIMEOUT)
+        res.raise_for_status()
+        return res.json().get("message", {}).get("content", "").strip()
+    except requests.Timeout:
+        return "Error: model timed out."
+    except requests.RequestException as e:
+        return f"Error: cannot reach Ollama ({e})."
+
+
+def infer_intent(user_input):
+    return chat_completion(
+        [
+            {"role": "system", "content": "State the user's intent in one short line. Nothing else."},
+            {"role": "user", "content": user_input},
+        ],
+        num_predict=30,
+    )
+
+
+# ----------------------------
+# PROMPT ASSEMBLY
+# ----------------------------
+
+def build_system_message(personality, behaviour, memory, knowledge, intent):
+    sections = [
+        SYSTEM_PROMPT,
+        f"PERSONALITY SPEC:\n{compact(personality)}",
+    ]
+    if behaviour:
+        examples = "\n".join(
+            f"- {b.get('situation')}: {b.get('response_style')} | e.g. \"{b.get('example')}\""
+            for b in behaviour
+        )
+        sections.append(f"RESPONSE EXAMPLES BY SITUATION:\n{examples}")
+
+    profile = static_profile(memory)
+    if profile:
+        sections.append(f"CREWMATE PROFILE (Tashrif):\n{compact(profile)}")
+    if memory["profile"].get("flags"):
+        sections.append(f"OBSERVED SIGNALS: {', '.join(memory['profile']['flags'])}")
+    if intent:
+        sections.append(f"INTERNAL STATE (inferred intent): {intent}")
+    if knowledge:
+        sections.append(f"RELEVANT KNOWLEDGE (from archive):\n{knowledge}")
+
+    return "\n\n".join(sections)
+
+
+def build_messages(system_message, memory, user_input):
+    messages = [{"role": "system", "content": system_message}]
+    for m in memory["short_term"]:
+        messages.append({"role": "user", "content": m["user"]})
+        messages.append({"role": "assistant", "content": m["vector"]})
+    messages.append({"role": "user", "content": user_input})
+    return messages
 
 
 # ----------------------------
@@ -205,57 +307,36 @@ def generate(prompt):
 
 def chat():
     memory = load_memory()
-    pdf_data = load_pdf_cache()
-    personality = load_personality()
+    index = build_index(load_pdf_cache())
+    personality = load_json(PERSONALITY_FILE, {})
+    behaviour = load_json(BEHAVIOUR_FILE, [])
 
     print("\n✅ Vector online.\n")
 
     while True:
-        user_input = input("You: ")
-
-        if user_input.lower() == "exit":
+        try:
+            user_input = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
             break
 
-        # --- INTERNAL THINK (silent, short) ---
-        thought_prompt = f"""
-User: {user_input}
-1 line intent only.
-"""
-        thought = generate(thought_prompt)
+        if not user_input:
+            continue
+        if user_input.lower() in ("exit", "quit"):
+            break
 
-        # --- KNOWLEDGE ---
-        knowledge = retrieve_knowledge(pdf_data, user_input)
+        intent = infer_intent(user_input) if USE_INTENT_STEP else ""
+        knowledge = retrieve_knowledge(index, user_input)
 
-        # --- FINAL PROMPT ---
-        final_prompt = f"""
-{SYSTEM_PROMPT}
-
-PERSONALITY SPEC:
-{json.dumps(personality, indent=2)}
-
-INTERNAL STATE:
-{thought}
-
-USER PROFILE:
-{json.dumps(memory['profile'], indent=2)}
-
-RELEVANT KNOWLEDGE:
-{knowledge}
-
-RECENT MEMORY:
-{format_recent_memory(memory)}
-
-
-User: {user_input}
-Vector:
-"""
-
-        response = generate(final_prompt)
+        system_message = build_system_message(personality, behaviour, memory, knowledge, intent)
+        response = chat_completion(build_messages(system_message, memory, user_input))
 
         print(f"\nVector: {response}\n")
-        speak(response)
 
-        # --- UPDATE SYSTEM ---
+        if response.startswith("Error:"):
+            continue  # don't speak or store failures
+
+        speak(response)
         update_profile(memory, user_input)
         update_memory(memory, user_input, response)
 
