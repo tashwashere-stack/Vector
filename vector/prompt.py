@@ -18,10 +18,13 @@ def build_system_message(persona: str, crewmate_summary: str) -> str:
 
 
 def few_shot_messages(behaviour: list[dict]) -> list[dict]:
+    """Example exchanges. An optional "archive" field shows the model how to
+    turn a textbook excerpt into Vector's own words."""
     messages = []
     for ex in behaviour:
         if ex.get("user") and ex.get("vector"):
-            messages.append({"role": "user", "content": ex["user"]})
+            user = build_user_turn(ex["user"], ex.get("archive", ""))
+            messages.append({"role": "user", "content": user})
             messages.append({"role": "assistant", "content": ex["vector"]})
     return messages
 
@@ -34,7 +37,7 @@ def static_prefix(persona: str, memory: Memory, behaviour: list[dict],
     system = build_system_message(persona, summary)
     if as_first_turn:
         head = [{"role": "user", "content": system},
-                {"role": "assistant", "content": "Understood. Vector online."}]
+                {"role": "assistant", "content": "Understand. Vector ready."}]
     else:
         head = [{"role": "system", "content": system}]
     return [*head, *few_shot_messages(behaviour)]
@@ -43,7 +46,7 @@ def static_prefix(persona: str, memory: Memory, behaviour: list[dict],
 def build_user_turn(user_input: str, knowledge: str = "", intent: str = "") -> str:
     context = []
     if knowledge:
-        context.append(f"ARCHIVE (facts only; answer in your own voice, 1-3 sentences):\n{knowledge}")
+        context.append(f"ARCHIVE (use facts, say them in your own short words):\n{knowledge}")
     if intent:
         context.append(f"(Intent: {intent})")
     return "\n\n".join([*context, user_input]) if context else user_input

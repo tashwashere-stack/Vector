@@ -4,7 +4,7 @@ import time
 import unittest
 from pathlib import Path
 
-from vector.knowledge import KnowledgeBase, cache_is_stale, chunk_text, query_terms
+from vector.knowledge import KnowledgeBase, cache_is_stale, chunk_text, query_terms, word_counts
 
 
 class ChunkTextTests(unittest.TestCase):
@@ -30,7 +30,7 @@ class SearchTests(unittest.TestCase):
             "Time dilation makes moving clocks run slow. Time is relative.",
         ])
         self.kb = KnowledgeBase(text)
-        self.kb.chunks = [(c, c.lower()) for c in chunk_text(text, size=50)]
+        self.kb.chunks = [(c, word_counts(c)) for c in chunk_text(text, size=50)]
 
     def test_ranks_best_match_first(self):
         result = self.kb.search("time dilation")
@@ -45,6 +45,10 @@ class SearchTests(unittest.TestCase):
 
     def test_single_shared_word_is_not_enough(self):
         self.assertEqual(self.kb.search("relative gravity of my mood"), "")
+
+    def test_matches_whole_words_only(self):
+        # "lative" appears inside "relative" but is not a word in the text.
+        self.assertEqual(self.kb.search("lative clocks"), "")
 
     def test_respects_char_limit(self):
         self.assertLessEqual(len(self.kb.search("time dilation", limit=20)), 20)

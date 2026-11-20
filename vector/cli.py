@@ -5,6 +5,7 @@ from vector.knowledge import KnowledgeBase
 from vector.memory import Memory
 from vector.prompt import build_messages, build_user_turn, static_prefix
 from vector.storage import load_json
+from vector.style import StyleStream
 from vector.voice import Speaker
 
 
@@ -42,27 +43,30 @@ def main() -> None:
         if user_input.lower() in ("exit", "quit"):
             break
 
-        reply = ""
+        sentences: list[str] = []
+
+        def show(new: list[str]) -> None:
+            for sentence in new:
+                print(("" if not sentences else " ") + sentence, end="", flush=True)
+                speaker.say(sentence)
+                sentences.append(sentence)
+
         try:
             intent = llm.infer_intent(user_input) if config.USE_INTENT_STEP else ""
             user_turn = build_user_turn(user_input, kb.search(user_input), intent)
+            style = StyleStream()
             print("\nVector: ", end="", flush=True)
             for piece in llm.stream_chat(build_messages(prefix, memory, user_turn)):
-                if not reply:
-                    piece = piece.lstrip()
-                    if not piece:
-                        continue
-                print(piece, end="", flush=True)
-                speaker.feed(piece)
-                reply += piece
+                show(style.feed(piece))
+                if style.done:
+                    break  # closes the stream; Ollama stops generating
+            show(style.flush())
         except llm.LLMError as e:
             print(f"\n❌ {e}\n")
             continue
-        finally:
-            speaker.flush()
 
         print("\n")
-        reply = reply.strip()
+        reply = " ".join(sentences)
         if reply:
             memory.observe(user_input)
             memory.remember(user_input, reply)

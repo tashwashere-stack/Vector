@@ -22,7 +22,9 @@ KEEP_ALIVE = "30m"           # keep the model in memory between messages
 NUM_CTX = 4096               # context window; prompt is ~300-900 tokens
 TEMPERATURE = 0.7
 TOP_P = 0.9
-MAX_REPLY_TOKENS = 80
+MAX_REPLY_TOKENS = 70
+MAX_SENTENCES = 3            # reply is cut (and generation stopped) after this many
+STYLE_FILTER = True          # enforce speech quirks: no articles/contractions, ", question?"
 STOP = ["\n\n"]             # one paragraph per reply
 # Mistral's chat template moves the system prompt into the *latest* user message,
 # which defeats Ollama's prompt cache. For those models, send the persona as the

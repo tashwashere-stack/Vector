@@ -26,6 +26,7 @@ vector/                 Python package
   prompt.py             System prompt and message assembly
   memory.py             Crewmate profile + short-term history
   knowledge.py          PDF extraction, caching, keyword retrieval
+  style.py              Speech-style pass: enforces Vector's broken-English quirks
   voice.py              Text-to-speech via `say`
   storage.py            JSON helpers
 data/
@@ -47,7 +48,9 @@ Edit [`vector/config.py`](vector/config.py):
 |---|---|---|
 | `MODEL` | `mistral` | Any model you've pulled in Ollama (`llama3.2:3b`, `qwen2.5:3b`, `gemma3:4b` are faster) |
 | `MAX_HISTORY` | `4` | Exchanges kept in short-term memory |
-| `MAX_REPLY_TOKENS` | `80` | Hard cap on reply length |
+| `MAX_REPLY_TOKENS` | `70` | Hard cap on reply length in tokens |
+| `MAX_SENTENCES` | `3` | Reply is cut, and generation stopped, after this many sentences |
+| `STYLE_FILTER` | `True` | Enforce the speech quirks after generation |
 | `TEMPERATURE` | `0.7` | Lower = more focused, higher = more random |
 | `KEEP_ALIVE` | `30m` | How long Ollama keeps the model loaded between messages |
 | `WARM_UP` | `True` | Load the model and cache the static prompt at startup |
@@ -61,6 +64,15 @@ Edit [`vector/config.py`](vector/config.py):
 - **Streaming.** Words print as they're generated, and speech runs sentence by sentence on a background thread.
 
 To give Vector a hand-written profile instead of the auto-condensed one, add a `"summary": "..."` string to `data/memory.json`.
+
+## Voice and speaking style
+
+Vector talks like an alien engineer who learned English recently: no articles, dropped "is/are/am", questions ending in ", question?", repeated words for strong feelings ("Good good good."), short literal sentences.
+
+Three layers produce that voice:
+1. **`data/persona.md`** sets out the grammar rules and character.
+2. **`data/behaviour.json`** holds example exchanges the model imitates. An entry can include an `"archive"` excerpt to show how textbook facts get turned into Vector's words. Adding examples is the most effective way to tune the voice.
+3. **`vector/style.py`** fixes what the model misses on every sentence (articles, contractions, "is/are/am", ", question?") and stops the reply after `MAX_SENTENCES`. Turn it off with `STYLE_FILTER = False`.
 
 ## Tests
 

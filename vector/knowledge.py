@@ -1,11 +1,14 @@
 """PDF knowledge base: extract, cache, chunk, keyword-rank."""
 
 import re
+from collections import Counter
 from pathlib import Path
 
 from pypdf import PdfReader
 
 from vector import config
+
+WORD = re.compile(r"[a-z0-9']+")
 
 STOPWORDS = {
     "a", "an", "the", "is", "are", "was", "were", "be", "to", "of", "in", "on",
@@ -15,6 +18,7 @@ STOPWORDS = {
     "like", "just", "know", "think", "want", "get", "make", "really", "now",
     "then", "also", "there", "have", "has", "had", "not", "but", "from", "they",
     "them", "when", "where", "which", "will", "would", "could", "should", "been",
+    "hey", "hello", "hi", "yes", "yeah", "okay", "thanks", "today", "going",
     "more", "some", "very", "did", "its", "talk", "say", "said", "thing", "things",
 }
 
@@ -79,14 +83,18 @@ def chunk_text(text: str, size: int = config.CHUNK_SIZE) -> list[str]:
 
 def query_terms(query: str) -> set[str]:
     return {
-        w for w in re.findall(r"[a-z0-9']+", query.lower())
+        w for w in WORD.findall(query.lower())
         if len(w) > 2 and w not in STOPWORDS
     }
 
 
+def word_counts(text: str) -> Counter:
+    return Counter(WORD.findall(text.lower()))
+
+
 class KnowledgeBase:
     def __init__(self, text: str):
-        self.chunks = [(c, c.lower()) for c in chunk_text(text)]
+        self.chunks = [(c, word_counts(c)) for c in chunk_text(text)]
 
     @classmethod
     def load(cls) -> "KnowledgeBase":
@@ -107,9 +115,9 @@ class KnowledgeBase:
         # At least half the key terms, and at least two when the query has two or more.
         needed = max(min(2, len(terms)), round(len(terms) * min_coverage))
         scored = []
-        for chunk, lower in self.chunks:
-            hits = [t for t in terms if t in lower]
+        for chunk, counts in self.chunks:
+            hits = [t for t in terms if counts[t]]
             if len(hits) >= needed:
-                scored.append((len(hits), sum(lower.count(t) for t in hits), chunk))
+                scored.append((len(hits), sum(counts[t] for t in hits), chunk))
         scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
         return "\n---\n".join(c for *_, c in scored[:top_k])[:limit]

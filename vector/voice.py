@@ -55,6 +55,11 @@ class Speaker:
             if sentence.strip():
                 self._queue.put(sentence.strip())
 
+    def say(self, sentence: str) -> None:
+        """Queue one complete sentence."""
+        if self.enabled and sentence.strip():
+            self._queue.put(sentence.strip())
+
     def flush(self) -> None:
         if self.enabled and self._buffer.strip():
             self._queue.put(self._buffer.strip())
