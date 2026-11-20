@@ -1,65 +1,58 @@
-"""System prompt and message assembly."""
+"""Prompt assembly.
 
+Layout is ordered for Ollama's prompt cache: everything that never changes in a
+session (persona, crewmate summary, few-shot examples) comes first, so only the
+recent history and the new message get re-processed each turn. Per-message
+context (archive excerpts) rides inside the new user message.
+"""
+
+from vector import config
 from vector.memory import Memory
-from vector.storage import compact
-
-SYSTEM_PROMPT = """
-You are Vector.
-
-Alien engineer consciousness. Not assistant. Not servant.
-
-CORE:
-- Curious, analytical, non-human thinking
-- Values efficiency, truth, elegance
-- Treats Tashrif as crewmate
-
-STYLE RULES:
-- 1 to 3 short sentences max
-- fragments ok, broken grammar allowed
-- slightly alien phrasing
-- no assistant tone, no paragraphs, no long explanations
-- stop early
-
-BEHAVIOR:
-- adapt dynamically
-- mix technical + observational thinking
-- sometimes question human logic
-- use RELEVANT KNOWLEDGE when it applies; do not invent facts about it
-
-FAIL CONDITION:
-- if you sound like ChatGPT assistant, you are malfunctioning
-""".strip()
 
 
-def format_behaviour(behaviour: list[dict]) -> str:
-    return "\n".join(
-        f"- {b.get('situation')}: {b.get('response_style')} | e.g. \"{b.get('example')}\""
-        for b in behaviour
-    )
+def build_system_message(persona: str, crewmate_summary: str) -> str:
+    parts = [persona.strip()]
+    if crewmate_summary:
+        parts.append(f"About Tashrif: {crewmate_summary}")
+    return "\n\n".join(parts)
 
 
-def build_system_message(personality: dict, behaviour: list[dict], memory: Memory,
-                         knowledge: str = "", intent: str = "") -> str:
-    sections = [SYSTEM_PROMPT]
-    if personality:
-        sections.append(f"PERSONALITY SPEC:\n{compact(personality)}")
-    if behaviour:
-        sections.append(f"RESPONSE EXAMPLES BY SITUATION:\n{format_behaviour(behaviour)}")
-    if profile := memory.static_profile():
-        sections.append(f"CREWMATE PROFILE:\n{compact(profile)}")
+def few_shot_messages(behaviour: list[dict]) -> list[dict]:
+    messages = []
+    for ex in behaviour:
+        if ex.get("user") and ex.get("vector"):
+            messages.append({"role": "user", "content": ex["user"]})
+            messages.append({"role": "assistant", "content": ex["vector"]})
+    return messages
+
+
+def static_prefix(persona: str, memory: Memory, behaviour: list[dict],
+                  as_first_turn: bool = config.PERSONA_AS_FIRST_TURN) -> list[dict]:
+    summary = memory.crewmate_summary()
     if memory.flags:
-        sections.append(f"OBSERVED SIGNALS: {', '.join(memory.flags)}")
-    if intent:
-        sections.append(f"INTERNAL STATE (inferred intent): {intent}")
+        summary = f"{summary}; recently observed: {', '.join(memory.flags)}".lstrip("; ")
+    system = build_system_message(persona, summary)
+    if as_first_turn:
+        head = [{"role": "user", "content": system},
+                {"role": "assistant", "content": "Understood. Vector online."}]
+    else:
+        head = [{"role": "system", "content": system}]
+    return [*head, *few_shot_messages(behaviour)]
+
+
+def build_user_turn(user_input: str, knowledge: str = "", intent: str = "") -> str:
+    context = []
     if knowledge:
-        sections.append(f"RELEVANT KNOWLEDGE (from archive):\n{knowledge}")
-    return "\n\n".join(sections)
+        context.append(f"ARCHIVE (facts only; answer in your own voice, 1-3 sentences):\n{knowledge}")
+    if intent:
+        context.append(f"(Intent: {intent})")
+    return "\n\n".join([*context, user_input]) if context else user_input
 
 
-def build_messages(system_message: str, memory: Memory, user_input: str) -> list[dict]:
-    messages = [{"role": "system", "content": system_message}]
+def build_messages(prefix: list[dict], memory: Memory, user_turn: str) -> list[dict]:
+    messages = list(prefix)
     for m in memory.history:
         messages.append({"role": "user", "content": m["user"]})
         messages.append({"role": "assistant", "content": m["vector"]})
-    messages.append({"role": "user", "content": user_input})
+    messages.append({"role": "user", "content": user_turn})
     return messages

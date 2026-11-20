@@ -12,6 +12,10 @@ STOPWORDS = {
     "and", "or", "for", "it", "this", "that", "with", "as", "at", "by", "do",
     "does", "what", "how", "why", "who", "you", "your", "me", "my", "i", "we",
     "can", "about", "tell", "explain", "vector", "please", "so", "if", "any",
+    "like", "just", "know", "think", "want", "get", "make", "really", "now",
+    "then", "also", "there", "have", "has", "had", "not", "but", "from", "they",
+    "them", "when", "where", "which", "will", "would", "could", "should", "been",
+    "more", "some", "very", "did", "its", "talk", "say", "said", "thing", "things",
 }
 
 
@@ -89,14 +93,23 @@ class KnowledgeBase:
         return cls(load_text())
 
     def search(self, query: str, top_k: int = config.TOP_K,
-               limit: int = config.KNOWLEDGE_CHAR_LIMIT) -> str:
+               limit: int = config.KNOWLEDGE_CHAR_LIMIT,
+               min_coverage: float = config.MIN_TERM_COVERAGE) -> str:
+        """Return the best-matching chunks, or "" when nothing is clearly relevant.
+
+        A chunk qualifies only if it contains at least `min_coverage` of the
+        query's key terms (and at least two of them for multi-term queries), so
+        casual chat doesn't drag archive text into the prompt.
+        """
         terms = query_terms(query)
         if not terms or not self.chunks:
             return ""
-        scored = [
-            (score, chunk)
-            for chunk, lower in self.chunks
-            if (score := sum(lower.count(t) for t in terms))
-        ]
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return "\n---\n".join(c for _, c in scored[:top_k])[:limit]
+        # At least half the key terms, and at least two when the query has two or more.
+        needed = max(min(2, len(terms)), round(len(terms) * min_coverage))
+        scored = []
+        for chunk, lower in self.chunks:
+            hits = [t for t in terms if t in lower]
+            if len(hits) >= needed:
+                scored.append((len(hits), sum(lower.count(t) for t in hits), chunk))
+        scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        return "\n---\n".join(c for *_, c in scored[:top_k])[:limit]

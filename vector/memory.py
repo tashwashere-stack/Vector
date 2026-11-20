@@ -38,6 +38,36 @@ class Memory:
     def static_profile(self) -> dict:
         return {k: v for k, v in self.data.items() if k not in RUNTIME_KEYS}
 
+    def crewmate_summary(self) -> str:
+        """Compact one-paragraph profile for the system prompt.
+
+        Uses a hand-written "summary" field if present; otherwise condenses the
+        most behaviour-relevant fields (a few items each) instead of dumping JSON.
+        """
+        if summary := self.data.get("summary"):
+            return summary.strip()
+
+        def pick(*path, n=3):
+            node = self.data
+            for key in path:
+                if not isinstance(node, dict):
+                    return []
+                node = node.get(key)
+            if isinstance(node, str):
+                return [node] if node else []
+            return [str(x) for x in (node or [])[:n]]
+
+        fields = [
+            ("interests", pick("core_identity", "fields_of_interest", n=4)),
+            ("goals", pick("core_identity", "goals", n=2)),
+            ("thinks", pick("behavioral_patterns", "thinking_style")),
+            ("stress", pick("current_state", "stress_factors", n=2)),
+            ("sleep", pick("current_state", "sleep_pattern")),
+            ("wants", pick("interaction_style", "expects_from_vector", n=4)),
+            ("dislikes", pick("preferences", "dislikes")),
+        ]
+        return "; ".join(f"{label}: {', '.join(vals)}" for label, vals in fields if vals)
+
     def observe(self, user_input: str) -> None:
         text = user_input.lower()
         for flag, words in PROFILE_TRIGGERS.items():

@@ -17,5 +17,26 @@ class SpeakTests(unittest.TestCase):
         self.assertNotIn("shell", kwargs)
 
 
+class SpeakerTests(unittest.TestCase):
+    def test_speaks_complete_sentences_in_order(self):
+        spoken = []
+        with mock.patch.object(voice.shutil, "which", return_value="/usr/bin/say"), \
+             mock.patch.object(voice, "_say", side_effect=spoken.append):
+            s = voice.Speaker(enabled=True)
+            for piece in ["Over", "loaded. Pick ", "one! Then", " rest"]:
+                s.feed(piece)
+            s.flush()
+            s.close()
+        self.assertEqual(spoken, ["Overloaded.", "Pick one!", "Then rest"])
+
+    def test_disabled_speaker_is_silent(self):
+        with mock.patch.object(voice, "_say") as say:
+            s = voice.Speaker(enabled=False)
+            s.feed("Hello. World.")
+            s.flush()
+            s.close()
+        say.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

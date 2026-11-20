@@ -39,8 +39,15 @@ class SearchTests(unittest.TestCase):
     def test_stopword_only_query_returns_nothing(self):
         self.assertEqual(self.kb.search("what is the"), "")
 
+    def test_irrelevant_query_returns_nothing(self):
+        # "time" matches, but "focus" and "problems" don't: below 50% coverage.
+        self.assertEqual(self.kb.search("can't focus on time problems"), "")
+
+    def test_single_shared_word_is_not_enough(self):
+        self.assertEqual(self.kb.search("relative gravity of my mood"), "")
+
     def test_respects_char_limit(self):
-        self.assertLessEqual(len(self.kb.search("time gravity", limit=20)), 20)
+        self.assertLessEqual(len(self.kb.search("time dilation", limit=20)), 20)
 
 
 class CacheStalenessTests(unittest.TestCase):
