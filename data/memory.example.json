@@ -1,0 +1,38 @@
+{
+  "core_identity": {
+    "name": "Your name",
+    "location": "Your city / country",
+    "fields_of_interest": ["Computer Science", "Physics"],
+    "goals": ["Build a personal AI agent"]
+  },
+  "behavioral_patterns": {
+    "thinking_style": ["Analytical"],
+    "work_style": ["Intense bursts of focus"],
+    "decision_style": ["Logic-driven"]
+  },
+  "current_state": {
+    "stress_factors": [],
+    "mental_state": [],
+    "sleep_pattern": "",
+    "energy_pattern": ""
+  },
+  "preferences": {
+    "communication_style": ["Short explanations preferred unless deep dive requested"],
+    "learning_style": ["Project-based"],
+    "likes": ["Elegant logic"],
+    "dislikes": ["Generic advice"]
+  },
+  "weakness_signals": [],
+  "interaction_style": {
+    "expects_from_vector": ["Technical insight", "Blunt observations"],
+    "tolerance": {
+      "politeness": "low",
+      "weirdness": "high",
+      "technical_depth": "high"
+    }
+  },
+  "profile": {
+    "flags": []
+  },
+  "short_term": []
+}

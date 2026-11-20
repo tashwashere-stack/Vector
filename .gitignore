@@ -1,5 +1,16 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
-pdf_cache.txt
-vector_memory.json
+*.egg-info/
+build/
+dist/
+
+# Private / generated
+data/memory.json
+.cache/
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/

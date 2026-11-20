@@ -1,0 +1,20 @@
+[project]
+name = "vector-agent"
+version = "0.2.0"
+description = "Vector: a local alien-engineer AI crewmate running on Ollama"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pypdf>=5.0",
+    "requests>=2.31",
+]
+
+[project.scripts]
+vector = "vector.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["vector"]
